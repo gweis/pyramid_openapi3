@@ -1,11 +1,11 @@
 """Tests views."""
 
 from dataclasses import dataclass
-from openapi_core.schema.responses.exceptions import InvalidResponse
 from openapi_core.shortcuts import RequestValidator
 from openapi_core.shortcuts import ResponseValidator
 from pyramid.exceptions import ConfigurationError
 from pyramid.httpexceptions import exception_response
+from pyramid.httpexceptions import HTTPForbidden
 from pyramid.interfaces import IRouteRequest
 from pyramid.interfaces import IRoutesMapper
 from pyramid.interfaces import IView
@@ -65,17 +65,6 @@ def test_add_spec_view() -> None:
                 (IViewClassifier, request, Interface), IView, name=""
             )
             assert view(request=None, context=None).body == MINIMAL_DOCUMENT
-
-
-def test_add_validation_error_view() -> None:
-    """Test registration of a view for rendering validation errors."""
-    with testConfig() as config:
-        config.include("pyramid_openapi3")
-        config.pyramid_openapi3_validation_error_view("foo_view")
-        assert (
-            config.registry._pyramid_openapi3_validation_view_name  # noqa: SF01
-            == "foo_view"
-        )
 
 
 def test_add_explorer_view() -> None:
@@ -158,56 +147,6 @@ def test_openapi_view() -> None:
         assert response.json == "bar"
 
 
-def test_openapi_view_validation_error() -> None:
-    """Test registration a an openapi view."""
-    with testConfig() as config:
-        config.include("pyramid_openapi3")
-
-        with tempfile.NamedTemporaryFile() as document:
-            document.write(
-                b'openapi: "3.0.0"\n'
-                b"info:\n"
-                b'  version: "1.0.0"\n'
-                b"  title: Foo API\n"
-                b"paths:\n"
-                b"  /foo:\n"
-                b"    get:\n"
-                b"      parameters:\n"
-                b"        - name: bar\n"
-                b"          in: query\n"
-                b"          required: true\n"
-                b"          schema:\n"
-                b"            type: integer\n"
-                b"      responses:\n"
-                b"        200:\n"
-                b"          description: A foo\n"
-            )
-            document.seek(0)
-
-            config.pyramid_openapi3_spec(
-                document.name, route="/foo.yaml", route_name="foo_api_spec"
-            )
-
-        config.add_route("foo", "/foo")
-        view_func = lambda *arg: "foo"  # noqa: E731  # pragma: no branch
-        config.add_view(openapi=True, renderer="json", view=view_func, route_name="foo")
-
-        validation_view = lambda *arg: "validation error"  # noqa: E731
-        config.add_view(view=validation_view, name="validation_view", renderer="json")
-        config.pyramid_openapi3_validation_error_view("validation_view")
-
-        request_interface = config.registry.queryUtility(IRouteRequest, name="foo")
-        view = config.registry.adapters.registered(
-            (IViewClassifier, request_interface, Interface), IView, name=""
-        )
-        request = DummyRequest(config=config)
-        request.matched_route = DummyRoute(name="foo", pattern="/foo")
-        context = None
-        response = view(context, request)
-
-        assert response.json == "validation error"
-
-
 def test_openapi_view_validate_HTTPExceptions() -> None:
     """Test that raised HTTPExceptions are validated against the spec.
 
@@ -240,9 +179,8 @@ def test_openapi_view_validate_HTTPExceptions() -> None:
         request.matched_route = DummyRoute(name="foo", pattern="/foo")
         context = None
 
-        with pytest.raises(InvalidResponse) as exc:
+        with pytest.raises(HTTPForbidden):
             view(context, request)
-
         assert str(exc.value) == "Unknown response http status: 403"
 
 
