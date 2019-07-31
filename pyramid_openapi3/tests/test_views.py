@@ -5,7 +5,6 @@ from openapi_core.shortcuts import RequestValidator
 from openapi_core.shortcuts import ResponseValidator
 from pyramid.exceptions import ConfigurationError
 from pyramid.httpexceptions import exception_response
-from pyramid.httpexceptions import HTTPForbidden
 from pyramid.interfaces import IRouteRequest
 from pyramid.interfaces import IRoutesMapper
 from pyramid.interfaces import IView
@@ -156,6 +155,12 @@ def test_openapi_view_validate_HTTPExceptions() -> None:
     responses in MINIMAL_DOCUMENT.
     """
     with testConfig() as config:
+        # add default exception view handler
+        from pyramid.httpexceptions import default_exceptionresponse_view
+        from pyramid.interfaces import IExceptionResponse
+
+        config.add_view(view=default_exceptionresponse_view, context=IExceptionResponse)
+
         config.include("pyramid_openapi3")
 
         with tempfile.NamedTemporaryFile() as document:
@@ -167,21 +172,20 @@ def test_openapi_view_validate_HTTPExceptions() -> None:
             )
 
         config.add_route("foo", "/foo")
-        view_func = lambda *arg: (_ for _ in ()).throw(  # noqa: E731
-            exception_response(403, json_body="Forbidden")
-        )
+
+        def view_func(*arg):
+            raise exception_response(403, json_body="Forbidden")
+
         config.add_view(openapi=True, renderer="json", view=view_func, route_name="foo")
 
-        request_interface = config.registry.queryUtility(IRouteRequest, name="foo")
-        view = config.registry.adapters.registered(
-            (IViewClassifier, request_interface, Interface), IView, name=""
-        )
-        request = DummyRequest(config=config)
-        request.matched_route = DummyRoute(name="foo", pattern="/foo")
-        context = None
+        request = DummyRequest(environ={"PATH_INFO": "/foo"}, registry=config.registry)
+        from pyramid.router import Router
 
-        with pytest.raises(HTTPForbidden):
-            view(context, request)
+        router = Router(config.registry)
+        response = router.handle_request(request)
+
+        assert response.status_code == 500
+        assert str(response) == "Unknown response http status: 403"
 
 
 def test_path_parameters() -> None:
